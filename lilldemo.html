@@ -1,0 +1,399 @@
+<!-- Lill's Demonstration app, by Michael Assis, 2018 -->
+<!DOCTYPE html>
+<html>
+<body>
+
+<h2>Demonstration of Lill's Method</h2>
+
+<p>Click to reach the target and find roots graphically! <br></p>
+
+
+<form id="coeffs" action="javascript:lillsmethod();">Input polynomial using a comma separated list of real coefficients:<br><input type="text" name="fname" value=""> </form> 
+
+<p id="poly"></p>
+
+<!-- Use px units for border, otherwise calculations in the javascript may not be correct-->
+<canvas id="myCanvas" width="400" height="400" style="border:1px solid #d3d3d3;">Your browser does not support the canvas element.</canvas>
+
+<p id="result"></p>
+<p id="debug"></p>
+
+<script>
+function lillsmethod()
+{
+    //Settings:
+    var extraaxeswidth=0.4; //Percentage of largest minimum bounding square to add on all sides
+    var axessettings = {axeslinewidth:1, axeslinecolor:'gray', axesdashtype:[2,2]};
+    var framesettings = {framelinewidth:2, framelinecolor:'blue', targetlinecolor:'#00ff00', targetsize:0.02}; //targetsize is proportion of canvas width, made into a square
+    var pathsettings = {pathlinewidth:2, pathlinecolor:'#000000'};
+    var mouseoversettings = {coordprecision:4, font:'10pt Calibri', fontcolor:'black', x:0.01, y:.99};
+    var resultsettings = {coordprecision:4, errorprecision:4};
+    var errorfontcolor='red';
+
+    //Initializations:
+    var canvas = document.getElementById("myCanvas");
+    var context = canvas.getContext("2d");
+    var rect = canvas.getBoundingClientRect();
+    var styling=getComputedStyle(canvas,null);
+    var leftborder=styling.getPropertyValue('border-left-width');
+    var rightborder=styling.getPropertyValue('border-right-width');
+    var bottomborder=styling.getPropertyValue('border-bottom-width');
+    var topborder=styling.getPropertyValue('border-top-width');
+    var leftbordersize= leftborder.split("p")[0];
+    var rightbordersize= rightborder.split("p")[0];
+    var bottombordersize= bottomborder.split("p")[0];
+    var topbordersize= topborder.split("p")[0];
+    var canvaswidth = rect.width - leftbordersize - rightbordersize;
+    var canvasheight = rect.height - bottombordersize - topbordersize
+    var clickPos={x:NaN,y:NaN}; //Initial value to prevent path drawing until click
+
+    //Get coefficients and check
+    var x = document.getElementById("coeffs");
+    input = x.elements[0].value;
+    var readout = readInput(input,errorfontcolor);
+    var deg=readout[0], c=readout[1], errflag=readout[2];
+
+    //Function calls:
+    context.clearRect(0, 0, canvas.width, canvas.height); //Refresh after new submission
+    context.beginPath();                                  //Refresh after new submission
+    writePoly(deg, c, "poly", errflag);
+    var P=getFrame(deg, c);
+    var axeslimits = getAxesLimits(deg, c, P, extraaxeswidth);
+    axeslimits.canvaswidth=canvaswidth;
+    axeslimits.canvasheight=canvasheight;
+    axeslimits.leftbordersize=leftbordersize;
+    axeslimits.rightbordersize=leftbordersize;
+    axeslimits.bottombordersize=leftbordersize;
+    axeslimits.topbordersize=leftbordersize;
+    drawAxes(axeslimits,axessettings,context);
+    drawFrame(deg,c,P,axeslimits,framesettings,context,errflag);
+
+    //Get and display mouseover coordinates
+    canvas.addEventListener('mousemove',function(evt) {var mousePos = getMousePos(axeslimits,canvas,evt);writeCoords(deg,c,P,framesettings,mouseoversettings,axeslimits,axessettings,pathsettings,mousePos,clickPos,canvas,errflag);}, false); 
+
+    //Get click information, calculate path, and display the result
+    canvas.addEventListener('click', function(evt) {clickPos = getMousePos(axeslimits,canvas, evt);
+            dist=drawPath(deg,c,P,axeslimits,axessettings,framesettings,pathsettings,clickPos,canvas,errflag,clickPos,canvas);
+            writeResult(resultsettings,clickPos,dist,errflag);}, false);
+}
+
+
+//Functions:
+//Get coordinates of the frame
+function getFrame(deg, c)
+{
+    var P = []; 
+    initializeMatrix(P,deg+2,2);
+    for (n=1;n<=deg+1;n++)
+    {
+        if ((n%4)===1)
+        {
+                P[n]=[P[n-1][0],P[n-1][1]+c[n-1]];
+        }
+        else if ((n%4)===2)
+        {
+                P[n]=[P[n-1][0]-c[n-1],P[n-1][1]];
+        }
+        else if ((n%4)===3)
+        {
+                P[n]=[P[n-1][0],P[n-1][1]-c[n-1]];
+        }
+        else
+        {
+                P[n]=[P[n-1][0]+c[n-1],P[n-1][1]];
+        }
+    }
+    return P;
+}
+
+//Find reasonable axes limits based on the frame coordinates
+function getAxesLimits(deg, c, P, extraaxeswidth)
+{
+    var xmin=0, xmax=0, ymin=0, ymax=0;
+    for (n=0;n<=deg+1;n++)
+    {
+        xmin=Math.min(xmin,P[n][0]);
+        xmax=Math.max(xmax,P[n][0]);
+        ymin=Math.min(ymin,P[n][1]-c[0]);
+        ymax=Math.max(ymax,P[n][1]-c[0]);
+    }
+    var axisscale=Math.ceil(Math.max(xmax-xmin,ymax-ymin));
+    xmin=xmin-extraaxeswidth*axisscale; xmax=xmin+(1+2*extraaxeswidth)*axisscale;
+    ymin=ymin-extraaxeswidth*axisscale; ymax=ymin+(1+2*extraaxeswidth)*axisscale;
+    var axeslimits = {xmin:xmin, xmax:xmax, ymin:ymin, ymax:ymax};
+    
+    return axeslimits;
+}
+    
+//Draw x and y axes
+function drawAxes(axeslimits,axessettings,context)
+{
+    var first,next;
+    context.beginPath();
+    first=canvasCoords(0,axeslimits.ymin,axeslimits);
+    context.moveTo(first.x,first.y);
+    next = canvasCoords(0,axeslimits.ymax,axeslimits);
+    context.lineTo(next.x,next.y);
+    context.lineWidth = axessettings.axeslinewidth;  //Axes line width
+    context.strokeStyle = axessettings.axeslinecolor //color chosen for the axes
+    context.setLineDash(axessettings.axesdashtype);  //The dash type
+    context.stroke();
+    first=canvasCoords(axeslimits.xmin,0,axeslimits);
+    context.moveTo(first.x,first.y);
+    next = canvasCoords(axeslimits.xmax,0,axeslimits);
+    context.lineTo(next.x,next.y);
+    context.stroke();
+}
+
+//Draw the frame around which the real roots bounce
+function drawFrame(deg,c,P,axeslimits,framesettings,context,errflag)
+{
+    if (errflag===1)
+    {
+        context.beginPath();
+        context.setLineDash([]);
+        first=canvasCoords(0,-c[0],axeslimits);
+        context.moveTo(first.x,first.y);
+        for (n=1;n<=deg+1;n++)
+        {
+            next = canvasCoords(P[n][0],P[n][1]-c[0],axeslimits);
+            context.lineTo(next.x,next.y);
+            context.lineWidth = framesettings.framelinewidth;  //The line width chosen for the frame
+            context.strokeStyle = framesettings.framelinecolor //The color chosen for the frame
+            context.stroke();
+        }
+        first=canvasCoords(P[deg+1][0],P[deg+1][1]-c[0],axeslimits);
+        context.beginPath();
+        context.strokeStyle=framesettings.targetlinecolor;
+        context.rect(first.x-framesettings.targetsize*axeslimits.canvaswidth/2,first.y-framesettings.targetsize*axeslimits.canvaswidth/2 ,framesettings.targetsize*axeslimits.canvaswidth,framesettings.targetsize*axeslimits.canvaswidth);
+        context.stroke();
+    }
+}
+
+//The path bouncing routine
+function drawPath(deg,c,P,axeslimits,axessettings,framesettings,pathsettings,R,canvas,errflag)
+{
+    var context = canvas.getContext("2d");
+    var L = []; 
+    initializeMatrix(L,deg+2,2);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.beginPath();
+    drawAxes(axeslimits,axessettings,context);
+    drawFrame(deg,c,P,axeslimits,framesettings,context,errflag);
+    context.beginPath();
+    context.setLineDash([]);
+    var s, phi;
+    for (n=1;n<=deg;n++)
+    {
+        if (n===1)
+        {
+            L[1]=[P[1][0]+c[0]*R.x,P[1][1]+c[0]*R.y];
+            var v0a=[L[1][0]-P[0][0],L[1][1]-P[0][1]];
+            var v01=[P[1][0]-P[0][0],P[1][1]-P[0][1]];
+            s=Math.sqrt((v0a[0]*v0a[0]+v0a[1]*v0a[1])/(v01[0]*v01[0]+v01[1]*v01[1]));
+            phi=Math.sign(-v0a[0])*Math.acos((v0a[0]*v01[0]+v0a[1]*v01[1])/(Math.sqrt(v0a[0]*v0a[0]+v0a[1]*v0a[1])*Math.sqrt(v01[0]*v01[0]+v01[1]*v01[1])));
+        }
+        else
+        {
+            var v=[P[n][0]-L[n-1][0],P[n][1]-L[n-1][1]];
+            L[n]=[L[n-1][0]+s*(Math.cos(phi)*v[0]-Math.sin(phi)*v[1]),L[n-1][1]+s*(Math.sin(phi)*v[0]+Math.cos(phi)*v[1])];
+        }
+    }
+    first=canvasCoords(0,-c[0],axeslimits);
+    context.moveTo(first.x,first.y);
+    for (n=1;n<=deg;n++)
+    {
+        next = canvasCoords(L[n][0],L[n][1]-c[0],axeslimits);
+        context.lineTo(next.x,next.y);
+        context.lineWidth = pathsettings.pathlinewidth;      //The path line width
+        context.strokeStyle = pathsettings.pathlinecolor     //The path line color
+        context.stroke();
+    }
+    return Math.sqrt((L[deg][0]-P[deg+1][0])*(L[deg][0]-P[deg+1][0])+(L[deg][1]-P[deg+1][1])*(L[deg][1]-P[deg+1][1]));
+}
+
+//Mouseover coordinate display
+function writeCoords(deg,c,P,framesettings,mouseoversettings,axeslimits,axessettings,pathsettings,mousePos,clickPos,canvas,errflag) 
+{
+    var message; 
+    var context = canvas.getContext("2d");
+    if (errflag===1)
+    {
+        if (mousePos.y>0)
+        {message = '(' + mousePos.x.toFixed(mouseoversettings.coordprecision) + '+' + mousePos.y.toFixed(mouseoversettings.coordprecision) + 'i)';}  
+        else
+        {message = '(' + mousePos.x.toFixed(mouseoversettings.coordprecision) + ' - ' + Math.abs(mousePos.y.toFixed(mouseoversettings.coordprecision)) + 'i)';}   
+    }
+    else
+    {
+        message='';
+    }
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    drawAxes(axeslimits,axessettings,context);
+    drawFrame(deg,c,P,axeslimits,framesettings,context,errflag);
+    drawPath(deg,c,P,axeslimits,axessettings,framesettings,pathsettings,clickPos,canvas,errflag);
+    context.font = mouseoversettings.font;  //Font for the mouseover text
+    context.fillStyle = mouseoversettings.fontcolor;  //Font color
+    context.fillText(message,axeslimits.canvaswidth*mouseoversettings.x,axeslimits.canvasheight*mouseoversettings.y);    //Location of the mouseover coordinates, using canvas rectangle coordinates
+}
+
+//Show the coordinates of the click and distance (error) to end location
+function writeResult(resultsettings,clickPos,dist,errflag) 
+{
+    var message;
+    if (errflag===1)
+    {
+        if (clickPos.y>0)
+        {message = clickPos.x.toFixed(resultsettings.coordprecision) + ' + ' + clickPos.y.toFixed(resultsettings.coordprecision) + 'i' +'<br>' + 'Error: ' + dist.toFixed(resultsettings.errorprecision);}    
+        else
+        {message = clickPos.x.toFixed(resultsettings.coordprecision) + ' - ' + Math.abs(clickPos.y.toFixed(resultsettings.coordprecision)) + 'i' +'<br>' + 'Error: ' + dist.toFixed(resultsettings.errorprecision);}  
+    }
+    else
+    {
+        message='';
+    }
+    document.getElementById("result").innerHTML =  message;   
+}
+
+//Pretty display of the polynomial
+function writePoly(deg, c, par, errflag)
+{
+    var polynom='';
+    if (errflag===1)
+    {
+        for (n=0;n<deg+1;n++)
+        {
+            if (n===0)
+            {
+                if (deg>1)
+                {
+                    polynom = polynom + 'x' + String(deg-n).sup();
+                }
+                else
+                {
+                    polynom = polynom + 'x';
+                }
+            }
+            else if (n===deg-1)
+            {
+                if (c[n]<0)
+                {
+                    polynom = polynom + c[n]+ 'x';
+                }
+                else
+                {
+                    polynom = polynom + '+' + c[n]+ 'x';
+                }
+            }
+            else if (n===deg)
+            {
+                if (c[n]<0)
+                {    
+                    polynom = polynom + c[n];
+                }
+                else
+                {
+                    polynom = polynom + '+' + c[n];
+                }
+            }
+            else
+            {
+                if (c[n]===1)
+                {
+                    polynom = polynom + '+' + 'x' + String(deg-n).sup();
+                }
+                else if (c[n]===-1)
+                {
+                    polynom = polynom + '-x' + String(deg-n).sup();
+                }
+                else if (c[n]<0)
+                {
+                    polynom = polynom + c[n]+ 'x' + String(deg-n).sup();
+                }
+                else
+                {
+                    polynom = polynom + '+' + c[n] + 'x' + String(deg-n).sup();
+                }
+            }
+        }
+        document.getElementById(par).innerHTML =  polynom + '=0';
+    }
+}
+
+//Change of coordinates from page and canvas coordinates to axes coordinates
+function getMousePos(axeslimits,canvas,evt) 
+{
+    var rect = canvas.getBoundingClientRect(); //Update global coordinates of the canvas location on the page
+    return {
+        x: (evt.clientX - rect.left-axeslimits.leftbordersize)/axeslimits.canvaswidth*(axeslimits.xmax-axeslimits.xmin)+axeslimits.xmin,
+        y: (axeslimits.ymax-(evt.clientY - rect.top-axeslimits.topbordersize)/axeslimits.canvasheight*(axeslimits.ymax-axeslimits.ymin))
+    };
+}
+
+//Convert from axes coordinates to canvas coordinates for drawing
+function canvasCoords(r,i,axeslimits) 
+{
+    return {
+        x: (r-axeslimits.xmin)/(axeslimits.xmax-axeslimits.xmin)*axeslimits.canvaswidth,
+        y: axeslimits.canvasheight-(i-axeslimits.ymin)/(axeslimits.ymax-axeslimits.ymin)*axeslimits.canvasheight
+    };
+}
+
+//Initialize a zeros matrix to a given size
+function initializeMatrix(matrix,rows,cols)
+{
+    for(var i=0; i<rows; i++) {
+        matrix[i] = [];
+        for(var j=0; j<cols; j++) {
+            matrix[i][j] = 0;
+        }
+    }
+}
+
+
+//Check and read in the input:
+function readInput(input,errorfontcolor)
+{
+    var test, numsplit, deg=0, c=[], errflag=0;
+    test=input.match(/,/g);
+    if (test===null)
+    {
+        document.getElementById("poly").innerHTML = 'Error: no commas, min degree is 1'.fontcolor(errorfontcolor);
+        deg=0;
+        c=[];
+    }
+    else 
+    {
+        deg=test.length;
+        numsplit=input.split(',');
+        for (n=0;n<=deg;n++)
+        {
+            if (isNaN(Number(numsplit[n]))===true)
+            {
+                document.getElementById("poly").innerHTML = 'Input contains non-numeric characters'.fontcolor(errorfontcolor);
+                c=[];
+                deg=0;
+                errflag=0;
+                break;
+            }
+            else
+            {   
+                c[n]=Number(numsplit[n]);
+            }
+        }
+    }
+    if (c.length !== 0)
+    {
+        errflag=1;
+        for (n=0;n<=deg;n++)
+        {
+            c[n]=c[n]/c[0];
+        }
+    }
+    return [deg,c,errflag];
+}
+
+</script>
+
+</body>
+</html>

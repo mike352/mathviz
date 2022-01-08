@@ -1,0 +1,705 @@
+<!-- Douglas-Rachford Demonstration app -->
+<!DOCTYPE html>
+<html>
+
+<head>
+<meta charset="utf-8"/>
+<title>Douglas-Rachford Demonstration</title>
+<head/>
+
+
+<body>
+<h2>Demonstration of the Douglas-Rachford algorithm</h2>
+
+<div style="width:100%;">
+<input type="checkbox" name="iterate" onclick="toggleiterations()"  autocomplete="off" checked>Iterate<br>
+<input type="checkbox" name="modifycurve1" onclick="togglecontrolpoints1()"  autocomplete="off">Show curve 1 control points<br>
+<input type="checkbox" name="modifycurve2" onclick="togglecontrolpoints2()"  autocomplete="off">Show curve 2 control points<br>
+<div style="width:120px;">
+<a id="downloadlink" download="DougRachDemo.png" style="cursor: pointer; display:block; text-decoration: none; text-align: center; background: #EEEEEE; padding:2px 6px 2px 6px; border-top: 1px solid #CCCCCC; border-right: 1px solid #333333; border-bottom: 1px solid #333333; border-left: 1px solid #CCCCCC; solid #000000; font:bold 11pt Arial; color:#333333;" onclick="downloadimage()">Export image</a>
+</div>
+<div id="sliderdiv" class="slidecontainer" style="margin:0;"><p id="showiterations">Number of iterations: 50</p><input id="iterationslider" type="range" min="1" max="500" value="50" autocomplete="off" class="slider"></div>
+</div>
+
+<div style="width:100%; display:inline;">
+<p id="instructions"></p>
+</div>
+
+<div id="layerwrapper" style="resize:both; position:relative; border:0px; margin:0px">
+<!-- Use px units for border, otherwise calculations in the javascript may not be correct-->
+<canvas id="curve1layer" width="0" height="0" style="position:absolute; top:0; left:0; z-index: 0; border:1px solid #d3d3d3;">Your browser does not support the canvas element.</canvas>
+<canvas id="curve2layer" width="0" height="0" style="position:absolute; top:0; left:1; z-index: 1; border:1px solid #d3d3d3;">Your browser does not support the canvas element.</canvas>
+<canvas id="controlpoints1layer" width="0" height="0" style="position:absolute; top:0; left:0; z-index: 2; border:1px solid #d3d3d3;">Your browser does not support the canvas element.</canvas>
+<canvas id="controlpoints2layer" width="0" height="0" style="position:absolute; top:0; left:1; z-index: 3; border:1px solid #d3d3d3;">Your browser does not support the canvas element.</canvas>
+<canvas id="iterationlayer" width="0" height="0" style="position:absolute; top:0; left:0; z-index: 4; border:1px solid #d3d3d3;">Your browser does not support the canvas element.</canvas>
+</div>
+
+<script>
+//Settings:
+var numpoints = 2000;
+var controlpoints1settings = {fillcolor:'#000000', endpointfillcolor:'red', squaresize:0.005, squaresizemin:10, linewidth:1, linecolor:'purple', selectsquaresize:0.0075, selectsquaresizemin:15}; //square size in percent of canvas width, minimum size in pixels
+var controlpoints2settings = {fillcolor:'blue', endpointfillcolor:'green', squaresize:0.005, squaresizemin:10, linewidth:1, linecolor:'purple', selectsquaresize:0.0075, selectsquaresizemin:15}; //square size in percent of canvas width, minimum size in pixels
+var curve1settings = {linewidth:1, linecolor:'#000000'};
+var curve2settings = {linewidth:1, linecolor:'blue'};
+var iterationsettings = {linewidth:1, linecolor:'red', radius:0.1}; //radius in percentage of canvas width
+
+//Initializations:
+var showcontrolpoints1 = false;
+var showcontrolpoints2 = false;
+var showiterations = true;
+var showiterations = true;
+var curve1canvas = document.getElementById("curve1layer");
+var curve1context = curve1canvas.getContext("2d");
+var curve2canvas = document.getElementById("curve2layer");
+var curve2context = curve2canvas.getContext("2d");
+var controlpoints1canvas = document.getElementById("controlpoints1layer");
+var controlpoints1context = controlpoints1canvas.getContext("2d");
+var controlpoints2canvas = document.getElementById("controlpoints2layer");
+var controlpoints2context = controlpoints2canvas.getContext("2d");
+var iterationcanvas = document.getElementById("iterationlayer");
+var iterationcontext = iterationcanvas.getContext("2d");
+var axeslimits;
+resizeAxes(curve1canvas); //representative canvas used to determine canvas style properties
+resizeCanvases(); 
+var slider = document.getElementById("iterationslider");
+var numiterations = slider.value;
+var iterationinstructions = '<h3 style="margin-top: 0; margin-bottom: 4px;">Iterations</h3> Click to begin Douglas-Ratchford iterations <br> Right-click to clear iterations';
+var controlpointinstructions = '<h3 style="margin-top: 0; margin-bottom: 4px;">Bezier control points</h3> <b>Move:</b> click to select and drag <br> <b>Add:</b> select existing point and double-click to create new adjacent point  <br> <b>Delete:</b> right-click point <br>';
+
+var clickPos={x:NaN,y:NaN}; //Initial value to prevent path drawing until click
+var select= {state:false, drag:false, list:0, point:0}; //Initially not dragging
+
+var controlpoints1 = {num:3, matrix:[[0.2*(axeslimits.xmax-axeslimits.xmin),0.2*(axeslimits.ymax-axeslimits.ymin)],[0.4*(axeslimits.xmax-axeslimits.xmin),0.6*(axeslimits.ymax-axeslimits.ymin)],[0.6*(axeslimits.xmax-axeslimits.xmin),0.3*(axeslimits.ymax-axeslimits.ymin)],[0.8*(axeslimits.xmax-axeslimits.xmin),0.7*(axeslimits.ymax-axeslimits.ymin)]]}; //Initially 4 control points, num is max index
+var controlpoints2 = {num:1, matrix:[[0.1*(axeslimits.xmax-axeslimits.xmin),0.2*(axeslimits.ymax-axeslimits.ymin)],[0.9*(axeslimits.xmax-axeslimits.xmin),0.7*(axeslimits.ymax-axeslimits.ymin)]]}; //Initially 2 control points, num is max index
+
+var dsliderdiv = document.getElementById("sliderdiv");
+var pshowiterations = document.getElementById("showiterations");
+slider.oninput = function() {
+  numiterations = slider.value;
+  pshowiterations.innerHTML = 'Number of iterations: ' + this.value;
+}
+
+//Listen for resizing of the window
+window.addEventListener('resize',resizeevent,false);
+
+//Check and start drag
+iterationcanvas.addEventListener('mousedown', function(event) {mousedownevent(event);}, false);
+
+//Check and drag
+iterationcanvas.addEventListener('mousemove',function(event) {moveevent(event);}, false); 
+
+//End drag
+iterationcanvas.addEventListener('mouseup', function(event) {mouseupevent(event);}, false);
+
+//Create new control point
+iterationcanvas.addEventListener('dblclick', function(event) {doubleclickevent(event);}, false);
+
+//Check and delete control point
+iterationcanvas.addEventListener('contextmenu', function(event) {rightclickevent(event);}, false);
+
+var B1=[];
+B1 = getBezier(controlpoints1);
+drawBezier(B1,controlpoints1,curve1settings,curve1context);
+var B2=[];
+B2 = getBezier(controlpoints2);
+drawBezier(B2,controlpoints2,curve2settings,curve2context);
+
+document.getElementById("instructions").innerHTML = iterationinstructions;
+
+function downloadimage()
+{
+  var printcanvas=document.createElement('canvas');
+  var printcontext=printcanvas.getContext('2d');
+  printcontext.canvas.width=axeslimits.canvaswidth;
+  printcontext.canvas.height=axeslimits.canvasheight;
+  printcontext.fillStyle = 'white'; //Background color
+  printcontext.fillRect(0,0,axeslimits.canvaswidth,axeslimits.canvasheight);
+  printcontext.stroke();
+  printcontext.drawImage(curve1canvas,0,0);
+  printcontext.drawImage(curve2canvas,0,0);
+  printcontext.drawImage(controlpoints1canvas,0,0);
+  printcontext.drawImage(controlpoints2canvas,0,0);
+  printcontext.drawImage(iterationcanvas,0,0);
+  var image = printcanvas.toDataURL("image/png").replace("image/png", "image/octet-stream"); 
+  document.getElementById("downloadlink").href = image;
+}
+
+
+//Functions:
+//Get scrollbar width
+function getScrollBarWidth () 
+{
+  var inner = document.createElement('p');
+  inner.style.width = "100%";
+  inner.style.height = "200px";
+  var outer = document.createElement('div');
+  outer.style.position = "absolute";
+  outer.style.top = "0px";
+  outer.style.left = "0px";
+  outer.style.visibility = "hidden";
+  outer.style.width = "200px";
+  outer.style.height = "150px";
+  outer.style.overflow = "hidden";
+  outer.appendChild (inner);
+  
+  document.body.appendChild (outer);
+  var w1 = inner.offsetWidth;
+  outer.style.overflow = 'scroll';
+  var w2 = inner.offsetWidth;
+  if (w1 == w2) w2 = outer.clientWidth;
+  
+  document.body.removeChild (outer);
+  return (w1 - w2);
+}
+
+//Resize axes
+function resizeAxes(canvas)
+{
+  scrollbarwidth=getScrollBarWidth();
+  var bodyelement = document.getElementsByTagName('body')[0];
+  var bodystyle = window.getComputedStyle(bodyelement);
+  var bodymarginleft = bodystyle.getPropertyValue('margin-left').split("p")[0];
+  var bodymarginright = bodystyle.getPropertyValue('margin-right').split("p")[0];
+  var bodymarginbottom = bodystyle.getPropertyValue('margin-bottom').split("p")[0];
+  var bodymargintop = bodystyle.getPropertyValue('margin-top').split("p")[0];
+  var context = canvas.getContext("2d");
+  var styling=getComputedStyle(canvas,null);
+  var leftborder=styling.getPropertyValue('border-left-width');
+  var rightborder=styling.getPropertyValue('border-right-width');
+  var bottomborder=styling.getPropertyValue('border-bottom-width');
+  var topborder=styling.getPropertyValue('border-top-width');
+  var leftbordersize= Number(leftborder.split("p")[0]);
+  var rightbordersize= Number(rightborder.split("p")[0]);
+  var bottombordersize= Number(bottomborder.split("p")[0]);
+  var topbordersize= Number(topborder.split("p")[0]);
+  var canvaswidth = window.innerWidth-bodymarginleft-bodymarginright-leftbordersize-rightbordersize-scrollbarwidth;
+  var canvasheight = 0.7*(window.innerHeight-bodymarginbottom-bodymargintop-bottombordersize-topbordersize);
+  axeslimits = {xmin:0, xmax:1, ymin:0, ymax:canvasheight/canvaswidth, canvaswidth:canvaswidth, canvasheight:canvasheight, leftbordersize:leftbordersize, rightbordersize:rightbordersize, bottombordersize:bottombordersize, topbordersize:topbordersize}
+}
+
+//Resize a particular canvas
+function resizeCanvases()
+{ 
+    curve1context.canvas.width=axeslimits.canvaswidth;
+    curve1context.canvas.height=axeslimits.canvasheight;
+    curve2context.canvas.width=axeslimits.canvaswidth;
+    curve2context.canvas.height=axeslimits.canvasheight;
+    controlpoints1context.canvas.width=axeslimits.canvaswidth;
+    controlpoints1context.canvas.height=axeslimits.canvasheight;
+    controlpoints2context.canvas.width=axeslimits.canvaswidth;
+    controlpoints2context.canvas.height=axeslimits.canvasheight;
+    iterationcontext.canvas.width=axeslimits.canvaswidth;
+    iterationcontext.canvas.height=axeslimits.canvasheight;
+}
+
+//Resize all canvases after a resizing event 
+function resizeevent()
+{
+  resizeAxes(curve1canvas); //representative canvas used to determine canvas style properties
+  resizeCanvases(); 
+  //numpoints=3*axeslimits.canvaswidth;
+  curve1context.clearRect(0, 0, curve1canvas.width, curve1canvas.height); //Refresh
+  curve1context.beginPath();  //Refresh
+  curve2context.clearRect(0, 0, curve2canvas.width, curve2canvas.height); //Refresh
+  curve2context.beginPath();  //Refresh
+  controlpoints1context.clearRect(0, 0, controlpoints1canvas.width, controlpoints1canvas.height); //Refresh
+  controlpoints1context.beginPath();  //Refresh
+  controlpoints2context.clearRect(0, 0, controlpoints2canvas.width, controlpoints2canvas.height); //Refresh
+  controlpoints2context.beginPath();  //Refresh
+  iterationcontext.clearRect(0, 0, iterationcanvas.width, iterationcanvas.height); //Refresh
+  iterationcontext.beginPath();  //Refresh
+  if (showcontrolpoints1 === true)
+  {
+    B1 = getBezier(controlpoints1);
+    drawBezier(B1,controlpoints1,curve1settings,curve1context);
+    drawControlPoints(controlpoints1,controlpoints1context,controlpoints1settings);
+  }
+  else if (showcontrolpoints2 === true)
+  {
+    B2 = getBezier(controlpoints2);
+    drawBezier(B2,controlpoints2,curve2settings,curve2context);
+    drawControlPoints(controlpoints2,controlpoints2context,controlpoints2settings);
+  }
+}
+
+//Toggle iterations
+function toggleiterations()
+{
+  if (showiterations === false)
+  {
+    showiterations = true;
+    if ((showcontrolpoints1 === false)&&(showcontrolpoints2 === false))
+    {
+      document.getElementById("instructions").innerHTML = iterationinstructions;
+    }
+    else
+    {
+      document.getElementById("instructions").innerHTML = iterationinstructions + '<br>' + controlpointinstructions;
+    }
+  }
+  else
+  {
+    showiterations = false;
+    if ((showcontrolpoints1 === false)&&(showcontrolpoints2 === false))
+    {
+      document.getElementById("instructions").innerHTML = '';
+    }
+    else
+    {
+      document.getElementById("instructions").innerHTML = controlpointinstructions;
+    }
+  }
+}
+
+//Show control points of curve 1
+function togglecontrolpoints1()
+{
+  if (showcontrolpoints1 === false)
+  {
+    showcontrolpoints1 = true;
+    drawControlPoints(controlpoints1,controlpoints1context,controlpoints1settings);
+  }
+  else
+  {
+    showcontrolpoints1 = false;
+    controlpoints1context.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+  }
+  
+  if (showcontrolpoints1 === true) 
+  {
+    if (showiterations===true)
+    {
+      document.getElementById("instructions").innerHTML = iterationinstructions + '<br>' + controlpointinstructions;
+    }
+    else
+    {
+      document.getElementById("instructions").innerHTML = controlpointinstructions;
+    }
+  }
+  else if ((showcontrolpoints2 === true)&&(showiterations === true))
+  {
+    document.getElementById("instructions").innerHTML = iterationinstructions + '<br>' + controlpointinstructions;
+  }
+  else if ((showcontrolpoints2 === true)&&(showiterations === false))
+  {
+    document.getElementById("instructions").innerHTML = controlpointinstructions;
+  }
+  else if ((showcontrolpoints2 === false)&&(showiterations === true))
+  {
+    document.getElementById("instructions").innerHTML = iterationinstructions;
+  }
+  else if ((showcontrolpoints2 === false)&&(showiterations === false))
+  {
+    document.getElementById("instructions").innerHTML = '';
+  }
+}
+
+//Show control points of curve 2
+function togglecontrolpoints2()
+{
+  if (showcontrolpoints2 === false)
+  {
+    showcontrolpoints2 = true;
+    drawControlPoints(controlpoints2,controlpoints2context,controlpoints2settings);
+  }
+  else
+  {
+    showcontrolpoints2 = false;
+    controlpoints2context.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+  }
+  
+  if (showcontrolpoints2 === true) 
+  {
+    if (showiterations===true)
+    {
+      document.getElementById("instructions").innerHTML = iterationinstructions + '<br>' + controlpointinstructions;
+    }
+    else
+    {
+      document.getElementById("instructions").innerHTML = controlpointinstructions;
+    }
+  }
+  else if ((showcontrolpoints1 === true)&&(showiterations === true))
+  {
+    document.getElementById("instructions").innerHTML = iterationinstructions + '<br>' + controlpointinstructions;
+  }
+  else if ((showcontrolpoints1 === true)&&(showiterations === false))
+  {
+    document.getElementById("instructions").innerHTML = controlpointinstructions;
+  }
+  else if ((showcontrolpoints1 === false)&&(showiterations === true))
+  {
+    document.getElementById("instructions").innerHTML = iterationinstructions;
+  }
+  else if ((showcontrolpoints1 === false)&&(showiterations === false))
+  {
+    document.getElementById("instructions").innerHTML = '';
+  }
+}
+
+
+//Get x and y coordinates of points on the Bezier curve
+function getBezier(controlpoints)
+{
+  //var numpoints = (controlpoints.num+1)*axeslimits.canvaswidth/10+1;
+  var P = []; 
+  initializeMatrix(P,numpoints,2);
+  var t;
+  for (var n=0;n<numpoints;n++)
+  {
+          t = n/numpoints;
+    for (var m=0;m<=controlpoints.num;m++)
+    {
+      P[n][0]+=binomial(controlpoints.num,m)*Math.pow(1-t,controlpoints.num-m)*Math.pow(t,m)*controlpoints.matrix[m][0];
+      P[n][1]+=binomial(controlpoints.num,m)*Math.pow(1-t,controlpoints.num-m)*Math.pow(t,m)*controlpoints.matrix[m][1];
+    }
+  }
+  return P;
+}
+
+//Draw Bezier curves
+function drawBezier(P,controlpoints,settings,context)
+{
+  //var numpoints = (controlpoints.num+1)*axeslimits.canvaswidth/10+1;
+  var first,next;
+  context.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+  context.beginPath();
+  context.lineWidth = settings.linewidth;  //Line width
+  context.strokeStyle = settings.linecolor //Line color
+  context.setLineDash([]); //Solid line style
+  
+  context.beginPath();
+  for (var n=0;n<numpoints-1;n++)
+  {
+    first=canvasCoords(P[n]);
+    context.moveTo(first.x,first.y);
+    next = canvasCoords(P[n+1]);
+    context.lineTo(next.x,next.y);
+    context.stroke();
+  }
+}
+
+//Draw control points
+function drawControlPoints(controlpoints,context,settings,which)
+{
+  context.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+  context.beginPath();
+  var canvassquaresize = Math.max(Math.round(settings.squaresize*axeslimits.canvaswidth),settings.squaresizemin);
+  for (var n=0;n<=controlpoints.num;n++)
+  {
+    if (n===0 || n===controlpoints.num)
+    {
+      context.fillStyle = settings.endpointfillcolor //Fill color
+    }
+    else
+    {
+      context.fillStyle = settings.fillcolor //Fill color
+    }
+    context.fillRect(canvasCoords(controlpoints.matrix[n]).x,canvasCoords(controlpoints.matrix[n]).y,canvassquaresize,canvassquaresize);
+    context.stroke();
+  }
+  
+  if ((select.state===true)&&(which===select.list))
+    {
+      context.lineWidth = settings.linewidth;  //Line width
+      context.strokeStyle = settings.linecolor //Line color
+      context.setLineDash([]); //Solid line style
+      var canvasselectsquaresize = Math.max(Math.round(settings.selectsquaresize*axeslimits.canvaswidth),settings.selectsquaresizemin);	context.rect(canvasCoords(controlpoints.matrix[select.point]).x-(canvasselectsquaresize-canvassquaresize)/2, canvasCoords(controlpoints.matrix[select.point]).y-(canvasselectsquaresize-canvassquaresize)/2,canvasselectsquaresize,canvasselectsquaresize);
+      context.stroke();
+    }
+}
+
+//Douglas-Rachford iteration function
+function iterate(clickPos)
+{
+    var D, minD, minm;
+    var I = []; 
+    initializeMatrix(I,numiterations+1,2);
+    I[0][0]=clickPos.x;
+    I[0][1]=clickPos.y;
+    for (var n=1;n<=numiterations;n++)
+    {
+        minD=Infinity;
+        for (var m=0;m<numpoints;m++)
+        {
+            D = Math.sqrt(Math.pow(I[n-1][0]-B1[m][0],2)+Math.pow(I[n-1][1]-B1[m][1],2));
+            if (D<minD)
+            {
+                minD=D;
+                minm=m;
+            }
+        }
+        I[n][0]=2*B1[minm][0]-I[n-1][0];
+        I[n][1]=2*B1[minm][1]-I[n-1][1];
+        minD=Infinity;
+        for (var m=0;m<numpoints;m++)
+        {
+            D = Math.sqrt(Math.pow(I[n][0]-B2[m][0],2)+Math.pow(I[n][1]-B2[m][1],2));
+            if (D<minD)
+            {
+                minD=D;
+                minm=m;
+            }
+        }
+        I[n][0]=B2[minm][0]-0.5*I[n][0]+0.5*I[n-1][0];
+        I[n][1]=B2[minm][1]-0.5*I[n][1]+0.5*I[n-1][1];
+    }
+    return I;
+}
+
+//Draw iterations 
+function drawiterations(I)
+{
+    var first, next;
+    iterationcontext.lineWidth=iterationsettings.linewidth;
+    iterationcontext.strokeStyle=iterationsettings.linecolor;
+    iterationcontext.beginPath();
+    iterationcontext.arc(canvasCoords(I[0]).x,canvasCoords(I[0]).y,axeslimits.canvaswidth*iterationsettings.radius/100,0,2*Math.PI,1);
+    iterationcontext.stroke(); 
+    for (var n=1;n<=numiterations;n++)
+    {
+        iterationcontext.beginPath();
+        iterationcontext.arc(canvasCoords(I[n]).x,canvasCoords(I[n]).y,axeslimits.canvaswidth*iterationsettings.radius/100,0,2*Math.PI,1);
+        iterationcontext.stroke(); 
+        first=canvasCoords(I[n-1]);
+        iterationcontext.moveTo(first.x,first.y);
+        next = canvasCoords(I[n]);
+        iterationcontext.lineTo(next.x,next.y);
+        iterationcontext.stroke();
+    }
+}
+
+//Mouse down event function
+function mousedownevent(event)
+{
+  clickPos = getMousePos(iterationcanvas, event);
+  var canvassquaresize; 
+  var found=false;
+  if (showcontrolpoints1===true)
+  {
+    canvassquaresize = Math.max(Math.round(controlpoints1settings.squaresize*axeslimits.canvaswidth),controlpoints1settings.squaresizemin)/axeslimits.canvaswidth*(axeslimits.xmax-axeslimits.xmin);
+    for (var n=controlpoints1.num; n>=0;n--)
+    {
+      if ((clickPos.x>=controlpoints1.matrix[n][0])&&(clickPos.x<=controlpoints1.matrix[n][0]+canvassquaresize)&&(clickPos.y<=controlpoints1.matrix[n][1])&&(clickPos.y>=controlpoints1.matrix[n][1]-canvassquaresize))
+      {
+        select.state=true;
+        select.drag=true;
+        select.list=1;
+        select.point=n;
+        B1 = getBezier(controlpoints1);
+        drawBezier(B1,controlpoints1,curve1settings,curve1context);
+        drawControlPoints(controlpoints1,controlpoints1context,controlpoints1settings,1);
+        found=true;
+        iterationcontext.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+        if (showcontrolpoints2===true)
+        {
+            drawControlPoints(controlpoints2,controlpoints2context,controlpoints2settings,2);
+        }
+      }
+    }
+  }
+  
+  if ((found===false)&&(showcontrolpoints2===true))
+  {
+    canvassquaresize = Math.max(Math.round(controlpoints2settings.squaresize*axeslimits.canvaswidth),controlpoints2settings.squaresizemin)/axeslimits.canvaswidth*(axeslimits.xmax-axeslimits.xmin);
+    for (var n=controlpoints2.num; n>=0;n--)
+    {
+      if ((clickPos.x>=controlpoints2.matrix[n][0])&&(clickPos.x<=controlpoints2.matrix[n][0]+canvassquaresize)&&(clickPos.y<=controlpoints2.matrix[n][1])&&(clickPos.y>=controlpoints2.matrix[n][1]-canvassquaresize))
+      {
+        select.state=true;
+        select.drag=true;
+        select.list=2;
+        select.point=n;
+        B2 = getBezier(controlpoints2);
+        drawBezier(B2,controlpoints2,curve2settings,curve2context);
+        drawControlPoints(controlpoints2,controlpoints2context,controlpoints2settings,2);
+        found=true;
+        iterationcontext.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+        if (showcontrolpoints1===true)
+        {
+          drawControlPoints(controlpoints1,controlpoints1context,controlpoints1settings,1);
+        }
+      }
+    }
+  }
+  
+  if ((found===false)&&(showiterations===true))
+  {
+    I = iterate(clickPos); 
+    drawiterations(I);
+  }
+}
+
+//Double click event function
+function doubleclickevent(event)
+{
+  clickPos = getMousePos(iterationcanvas, event); 
+  if (select.state===true)
+  {
+    if (select.list===1)
+    {
+      select.point+=1;
+      controlpoints1.num+=1;
+      controlpoints1.matrix.splice(select.point,0,[clickPos.x,clickPos.y]);
+      select.state=true;
+      select.list=1;
+      B1 = getBezier(controlpoints1);
+      drawBezier(B1,controlpoints1,curve1settings,curve1context);
+      drawControlPoints(controlpoints1,controlpoints1context,controlpoints1settings,1); 
+      iterationcontext.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+      if (showcontrolpoints2===true)
+      {
+          drawControlPoints(controlpoints2,controlpoints2context,controlpoints2settings,2);
+      }
+    }
+    else if (select.list===2)
+    {
+      select.point+=1;
+      controlpoints2.num+=1;
+      controlpoints2.matrix.splice(select.point,0,[clickPos.x,clickPos.y]);
+      select.state=true;
+      select.list=2;
+      B2 = getBezier(controlpoints2);
+      drawBezier(B2,controlpoints2,curve2settings,curve2context);
+      drawControlPoints(controlpoints2,controlpoints2context,controlpoints2settings,2); 
+      iterationcontext.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+      if (showcontrolpoints1===true)
+      {
+        drawControlPoints(controlpoints1,controlpoints1context,controlpoints1settings,1);
+      }
+    }
+  }
+}
+
+//Right click event function
+function rightclickevent(event)
+{
+  var found=false;
+  select.state=false;
+  select.drag=false;
+  event.preventDefault();
+  clickPos = getMousePos(iterationcanvas, event);
+  var canvassquaresize;
+  if (showcontrolpoints1===true)
+  {
+    canvassquaresize = Math.max(Math.round(controlpoints1settings.squaresize*axeslimits.canvaswidth),controlpoints1settings.squaresizemin)/axeslimits.canvaswidth*(axeslimits.xmax-axeslimits.xmin);
+    for (var n=controlpoints1.num; n>=0;n--)
+    {
+      if ((clickPos.x>=controlpoints1.matrix[n][0])&&(clickPos.x<=controlpoints1.matrix[n][0]+canvassquaresize)&&(clickPos.y<=controlpoints1.matrix[n][1])&&(clickPos.y>=controlpoints1.matrix[n][1]-canvassquaresize))
+      {
+        controlpoints1.matrix.splice(n,1);
+        controlpoints1.num-=1;
+        B1 = getBezier(controlpoints1);
+        drawBezier(B1,controlpoints1,curve1settings,curve1context);
+        drawControlPoints(controlpoints1,controlpoints1context,controlpoints1settings,1);
+        found=true;
+        iterationcontext.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+      }
+    }
+    B1 = getBezier(controlpoints1);
+    drawBezier(B1,controlpoints1,curve1settings,curve1context);
+    drawControlPoints(controlpoints1,controlpoints1context,controlpoints1settings,1);
+  }
+  
+  if ((found===false)&&(showcontrolpoints2===true))
+  {
+    canvassquaresize = Math.max(Math.round(controlpoints2settings.squaresize*axeslimits.canvaswidth),controlpoints2settings.squaresizemin)/axeslimits.canvaswidth*(axeslimits.xmax-axeslimits.xmin);
+    for (var n=controlpoints2.num; n>=0;n--)
+    {
+      if ((clickPos.x>=controlpoints2.matrix[n][0])&&(clickPos.x<=controlpoints2.matrix[n][0]+canvassquaresize)&&(clickPos.y<=controlpoints2.matrix[n][1])&&(clickPos.y>=controlpoints2.matrix[n][1]-canvassquaresize))
+      {
+        controlpoints2.matrix.splice(n,1);
+        controlpoints2.num-=1; 
+        B2 = getBezier(controlpoints2);
+        drawBezier(B2,controlpoints2,curve2settings,curve2context);
+        drawControlPoints(controlpoints2,controlpoints2context,controlpoints2settings,2);
+        iterationcontext.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+        found=true;
+      }
+    }
+    B2 = getBezier(controlpoints2);
+    drawBezier(B2,controlpoints2,curve2settings,curve2context);
+    drawControlPoints(controlpoints2,controlpoints2context,controlpoints2settings,2);
+  }
+  
+  if (found===false)
+  {
+    iterationcontext.clearRect(0, 0, axeslimits.canvaswidth, axeslimits.canvasheight); //Refresh
+  }
+}
+
+//Mouse up event function
+function mouseupevent()
+{
+  select.drag=false;
+}
+
+//Mouse drag function
+function moveevent(evt) 
+{
+  if (select.drag===true)
+  {
+    var mousePos = getMousePos(iterationcanvas,evt);
+    if (select.list===1)
+    {
+      controlpoints1.matrix[select.point][0]=mousePos.x;
+      controlpoints1.matrix[select.point][1]=mousePos.y;
+      B1 = getBezier(controlpoints1);
+      drawBezier(B1,controlpoints1,curve1settings,curve1context);
+      drawControlPoints(controlpoints1,controlpoints1context,controlpoints1settings,1);
+    }
+    else
+    {
+      controlpoints2.matrix[select.point][0]=mousePos.x;
+      controlpoints2.matrix[select.point][1]=mousePos.y;
+      B2 = getBezier(controlpoints2);
+      drawBezier(B2,controlpoints2,curve2settings,curve2context);
+      drawControlPoints(controlpoints2,controlpoints2context,controlpoints2settings,2);
+    }
+  }
+}
+
+//Get mouse canvas coordinates
+function getMousePos(canvas,evt) 
+{
+    var rect = canvas.getBoundingClientRect(); //Update global coordinates of the canvas location on the page
+    return {
+        x: ((evt.clientX - rect.left-axeslimits.leftbordersize))/axeslimits.canvaswidth*(axeslimits.xmax-axeslimits.xmin)+axeslimits.xmin,
+        y: (axeslimits.canvasheight-(evt.clientY - rect.top-axeslimits.topbordersize))/axeslimits.canvasheight*(axeslimits.ymax-axeslimits.ymin)+axeslimits.ymin
+    };
+}
+
+//Convert from axes coordinates to canvas coordinates
+function canvasCoords(r) 
+{
+    return {
+        x: Math.round((r[0]-axeslimits.xmin)/(axeslimits.xmax-axeslimits.xmin)*axeslimits.canvaswidth),
+        y: Math.round(axeslimits.canvasheight-(r[1]-axeslimits.ymin)/(axeslimits.ymax-axeslimits.ymin)*axeslimits.canvasheight)
+    };
+}
+
+//Initialize a zeros matrix to a given size
+function initializeMatrix(matrix,rows,cols)
+{
+    for(var i=0; i<rows; i++) {
+        matrix[i] = [];
+        for(var j=0; j<cols; j++) {
+            matrix[i][j] = 0;
+        }
+    }
+}
+
+//Binomial coefficients
+function binomial(n, k) 
+{
+	var coeff = 1;
+	for (var x = n-k+1; x <= n; x++) coeff *= x;
+	for (x = 1; x <= k; x++) coeff /= x;
+	return coeff;
+}
+
+</script>
+
+</body>
+</html>
+<!-- by Michael Assis, 2018 -->
